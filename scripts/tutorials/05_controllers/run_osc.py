@@ -210,6 +210,8 @@ def run_simulator(sim: sim_utils.SimulationContext, scene: InteractiveScene):
     count = 0
     # Simulation loop
     while simulation_app.is_running():
+        print('command', command[0])
+        print('command shape', command.shape)
         # reset every 500 steps
         if count % 500 == 0:
             # reset joint state to default

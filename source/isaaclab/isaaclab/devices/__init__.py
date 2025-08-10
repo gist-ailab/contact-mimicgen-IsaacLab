@@ -24,4 +24,4 @@ from .gamepad import Se2Gamepad, Se3Gamepad
 from .keyboard import Se2Keyboard, Se3Keyboard
 from .openxr import OpenXRDevice
 from .retargeter_base import RetargeterBase
-from .spacemouse import Se2SpaceMouse, Se3SpaceMouse
+from .spacemouse import Se2SpaceMouse, Se3SpaceMouse, Se3PySpaceMouse

@@ -51,10 +51,11 @@ import torch
 
 import omni.log
 
+
 if "handtracking" in args_cli.teleop_device.lower():
     from isaacsim.xr.openxr import OpenXRSpec
 
-from isaaclab.devices import OpenXRDevice, Se3Gamepad, Se3Keyboard, Se3SpaceMouse
+from isaaclab.devices import OpenXRDevice, Se3Gamepad, Se3Keyboard, Se3SpaceMouse, Se3PySpaceMouse
 
 if args_cli.enable_pinocchio:
     from isaaclab.devices.openxr.retargeters.humanoid.fourier.gr1t2_retargeter import GR1T2Retargeter
@@ -188,6 +189,10 @@ def main():
     elif args_cli.teleop_device.lower() == "spacemouse":
         teleop_interface = Se3SpaceMouse(
             pos_sensitivity=0.05 * args_cli.sensitivity, rot_sensitivity=0.05 * args_cli.sensitivity
+        )
+    elif args_cli.teleop_device.lower() == "pyspacemouse":
+        teleop_interface = Se3PySpaceMouse(
+            pos_sensitivity=0.1 * args_cli.sensitivity, rot_sensitivity=0.2 * args_cli.sensitivity
         )
     elif args_cli.teleop_device.lower() == "gamepad":
         teleop_interface = Se3Gamepad(

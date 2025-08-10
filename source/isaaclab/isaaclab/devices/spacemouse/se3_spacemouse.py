@@ -145,6 +145,7 @@ class Se3SpaceMouse(DeviceBase):
         while True:
             # read the device data
             data = self._device.read(7)
+            print('delta rot: ', self._delta_rot)
             if data is not None:
                 # readings from 6-DoF sensor
                 if data[0] == 1:

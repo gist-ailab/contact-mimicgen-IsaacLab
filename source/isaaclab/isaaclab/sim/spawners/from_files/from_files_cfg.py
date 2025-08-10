@@ -68,7 +68,7 @@ class FileCfg(RigidObjectSpawnerCfg, DeformableObjectSpawnerCfg):
 
 
 @configclass
-class UsdFileCfg(FileCfg):
+class  UsdFileCfg(FileCfg):
     """USD file to spawn asset from.
 
     USD files are imported directly into the scene. However, given their complexity, there are various different

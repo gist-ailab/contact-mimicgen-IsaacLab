@@ -7,3 +7,4 @@
 
 from .se2_spacemouse import Se2SpaceMouse
 from .se3_spacemouse import Se3SpaceMouse
+from .se3_pyspacemouse import Se3PySpaceMouse

@@ -125,7 +125,6 @@ class HDF5DatasetFileHandler(DatasetFileHandlerBase):
             return data
 
         episode.data = load_dataset_helper(h5_episode_group)
-
         if "seed" in h5_episode_group.attrs:
             episode.seed = h5_episode_group.attrs["seed"]
 

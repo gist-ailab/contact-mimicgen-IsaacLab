@@ -87,7 +87,7 @@ import omni.log
 import omni.ui as ui
 
 # Additional Isaac Lab imports that can only be imported after the simulator is running
-from isaaclab.devices import OpenXRDevice, Se3Keyboard, Se3SpaceMouse
+from isaaclab.devices import OpenXRDevice, Se3Keyboard, Se3SpaceMouse, Se3PySpaceMouse
 
 import isaaclab_mimic.envs  # noqa: F401
 from isaaclab_mimic.ui.instruction_display import InstructionDisplay, show_subtask_instructions
@@ -102,6 +102,12 @@ from isaaclab.envs.ui import EmptyWindow
 from isaaclab.managers import DatasetExportMode
 
 import isaaclab_tasks  # noqa: F401
+# Add assembly to Python path and import to register environments
+import sys
+import os
+sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..'))
+import assembly  # noqa: F401
+
 from isaaclab_tasks.utils.parse_cfg import parse_env_cfg
 
 
@@ -294,6 +300,8 @@ def main():
             return Se3Keyboard(pos_sensitivity=0.2, rot_sensitivity=0.5)
         elif device_name == "spacemouse":
             return Se3SpaceMouse(pos_sensitivity=0.2, rot_sensitivity=0.5)
+        elif device_name == "pyspacemouse":
+            return Se3PySpaceMouse(pos_sensitivity=0.1, rot_sensitivity=0.2)
         elif "dualhandtracking_abs" in device_name and "GR1T2" in env.cfg.env_name:
             # Create GR1T2 retargeter with desired configuration
             gr1t2_retargeter = GR1T2Retargeter(
@@ -386,7 +394,6 @@ def main():
                         show_subtask_instructions(instruction_display, subtasks, obv, env.cfg)
             else:
                 env.sim.render()
-
             if success_term is not None:
                 if bool(success_term.func(env, **success_term.params)[0]):
                     success_step_count += 1
