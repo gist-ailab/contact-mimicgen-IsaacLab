@@ -16,7 +16,8 @@ from isaaclab.utils.assets import ISAAC_NUCLEUS_DIR, ISAACLAB_NUCLEUS_DIR
 from isaaclab_tasks.manager_based.manipulation.stack import mdp
 from isaaclab_tasks.manager_based.manipulation.stack.mdp import franka_stack_events
 # from isaaclab_tasks.manager_based.manipulation.stack.stack_env_cfg import StackEnvCfg
-from assembly.bolt_nut.boltnut_env_cfg import BoltNutEnvCfg
+# from assembly.bolt_nut.boltnut_env_cfg import BoltNutEnvCfg
+from assembly.bolt_nut.boltnut_script_env_cfg import BoltNutEnvCfg
 
 ##
 # Pre-defined configs
@@ -56,7 +57,6 @@ class EventCfg:
         func=franka_stack_events.randomize_object_pose,
         mode="reset",
         params={
-            # "pose_range": {"x": (0.4, 0.6), "y": (-0.10, 0.10), "z": (0.0203, 0.0203), "yaw": (-1.0, 1, 0)},
             "pose_range": {"x": (0.4, 0.6), "y": (-0.10, 0.10), "z": (0.0, 0.0), "yaw": (-1.0, 1, 0)},
             "min_separation": 0.1,
             "asset_cfgs": [SceneEntityCfg("socket"), SceneEntityCfg("plug")],
@@ -76,6 +76,7 @@ class FrankaBoltNutEnvCfg(BoltNutEnvCfg):
         # Set Franka as robot
         self.scene.robot = FRANKA_PANDA_CFG.replace(prim_path="{ENV_REGEX_NS}/Robot")
         self.scene.robot.spawn.semantic_tags = [("class", "robot")]
+        # Only set effort_limit_sim, not effort_limit
         self.scene.robot.actuators["panda_hand"].effort_limit_sim = 1000.0
         self.scene.robot.actuators["panda_hand"].velocity_limit_sim = 0.3
         self.scene.robot.actuators["panda_hand"].friction = 40.0
@@ -107,31 +108,17 @@ class FrankaBoltNutEnvCfg(BoltNutEnvCfg):
             disable_gravity=False,
         )
 
-        # Set each stacking cube deterministically
-        # self.scene.cube_1 = RigidObjectCfg(
-        #     prim_path="{ENV_REGEX_NS}/Cube_1",
-        #     init_state=RigidObjectCfg.InitialStateCfg(pos=[0.4, 0.0, 0.0203], rot=[1, 0, 0, 0]),
-        #     spawn=UsdFileCfg(
-        #         usd_path=f"{ISAAC_NUCLEUS_DIR}/Props/Blocks/blue_block.usd",
-        #         scale=(1.0, 1.0, 1.0),
-        #         rigid_props=cube_properties,
-        #         semantic_tags=[("class", "cube_1")],
-        #     ),
         self.scene.socket = ArticulationCfg(
             prim_path="{ENV_REGEX_NS}/Socket",
-            # init_state=RigidObjectCfg.InitialStateCfg(pos=[0.4, 0.0, 0.0203], rot=[1, 0, 0, 0]),
             init_state=ArticulationCfg.InitialStateCfg(
-                # init_state=RigidObjectCfg.InitialStateCfg(
-                pos=(0.6, 0.0, -0.1),
+                pos=(0.6, 0.0, 0.1),
                 rot=(1.0, 0.0, 0.0, 0.0),
                 joint_pos={},
                 joint_vel={},
             ),
             actuators={},
             spawn=UsdFileCfg(
-                # usd_path=f"{ASSET_DIR}/00271/socket.usd",
                 usd_path=f"{ASSET_DIR}/00186/socket.usd",
-                # scale=(1.0, 1.0, 1.0),
                 activate_contact_sensors=True,
                 rigid_props=sim_utils.RigidBodyPropertiesCfg(
                     disable_gravity=False,
@@ -147,37 +134,22 @@ class FrankaBoltNutEnvCfg(BoltNutEnvCfg):
                 ),
                 articulation_props=sim_utils.ArticulationRootPropertiesCfg(
                     enabled_self_collisions=True,
-                    fix_root_link=True,  # add this so the fixed asset is set to have a fixed base
-                    # fix_root_link=False,  # add this so the fixed asset is set to have a fixed base
+                    fix_root_link=True,
                 ),
                 mass_props=sim_utils.MassPropertiesCfg(mass=0.05),
                 collision_props=sim_utils.CollisionPropertiesCfg(contact_offset=0.005, rest_offset=0.0),
                 semantic_tags=[("class", "socket")],
             ),
         )
-        # self.scene.cube_2 = RigidObjectCfg(
-        #     prim_path="{ENV_REGEX_NS}/Cube_2",
-        #     init_state=RigidObjectCfg.InitialStateCfg(pos=[0.55, 0.05, 0.0203], rot=[1, 0, 0, 0]),
-        #     spawn=UsdFileCfg(
-        #         usd_path=f"{ISAAC_NUCLEUS_DIR}/Props/Blocks/red_block.usd",
-        #         scale=(1.0, 1.0, 1.0),
-        #         rigid_props=cube_properties,
-        #         semantic_tags=[("class", "cube_2")],
-        #     ),
-        # )
+
         self.scene.plug = RigidObjectCfg(
             prim_path="{ENV_REGEX_NS}/Plug",
-            # init_state=RigidObjectCfg.InitialStateCfg(pos=[0.55, 0.05, 0.0203], rot=[1, 0, 0, 0]),
             init_state=RigidObjectCfg.InitialStateCfg(
                 pos=(0.0, 0.4, 0.1),
                 rot=(1.0, 0.0, 0.0, 0.0),
-                # joint_pos={},
-                # joint_vel={}
             ),
             spawn=UsdFileCfg(
-                # usd_path=f"{ASSET_DIR}/00271/plug.usd",
                 usd_path=f"{ASSET_DIR}/00186/plug.usd",
-                # scale=(1.0, 1.0, 1.0),
                 activate_contact_sensors=True,
                 rigid_props=sim_utils.RigidBodyPropertiesCfg(
                     disable_gravity=False,
@@ -200,16 +172,6 @@ class FrankaBoltNutEnvCfg(BoltNutEnvCfg):
                 semantic_tags=[("class", "plug")],
             ),
         )
-        # self.scene.cube_3 = RigidObjectCfg(
-        #     prim_path="{ENV_REGEX_NS}/Cube_3",
-        #     init_state=RigidObjectCfg.InitialStateCfg(pos=[0.60, -0.1, 0.0203], rot=[1, 0, 0, 0]),
-        #     spawn=UsdFileCfg(
-        #         usd_path=f"{ISAAC_NUCLEUS_DIR}/Props/Blocks/green_block.usd",
-        #         scale=(1.0, 1.0, 1.0),
-        #         rigid_props=cube_properties,
-        #         semantic_tags=[("class", "cube_3")],
-        #     ),
-        # )
 
         # Listens to the required transforms
         marker_cfg = FRAME_MARKER_CFG.copy()
