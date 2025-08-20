@@ -90,23 +90,16 @@ class SceneCfg(InteractiveSceneCfg):
         spawn=sim_utils.CuboidCfg(
             size=(1.0, 0.6, 0.8),
             collision_props=sim_utils.CollisionPropertiesCfg(),
-            visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(0.8, 0.8, 0.8)),
+            visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(0.05, 0.05, 0.05), opacity=1),  # Red color for testing
             rigid_props=sim_utils.RigidBodyPropertiesCfg(kinematic_enabled=True),
         ),
     )
     
-    # Table
-    # table = AssetBaseCfg(
-    #     prim_path="{ENV_REGEX_NS}/Table",
-    #     init_state=AssetBaseCfg.InitialStateCfg(pos=[0.5, 0, 0], rot=[0.707, 0, 0, 0.707]),
-    #     spawn=UsdFileCfg(usd_path=f"{ISAAC_NUCLEUS_DIR}/Props/Mounts/SeattleLabTable/table_instanceable.usd"),
-    # )
-
     # Socket
     socket = ArticulationCfg(
         prim_path="{ENV_REGEX_NS}/Socket",
         init_state=ArticulationCfg.InitialStateCfg(
-            pos=(0.6, 0.0, 0.1),  # Back to original position from boltnut config
+            pos=(0.6, 0.0, 0.8),  # On table surface
             rot=(1.0, 0.0, 0.0, 0.0),
             joint_pos={},
             joint_vel={},
@@ -141,13 +134,14 @@ class SceneCfg(InteractiveSceneCfg):
     plug = RigidObjectCfg(
         prim_path="{ENV_REGEX_NS}/Plug",
         init_state=RigidObjectCfg.InitialStateCfg(
-            pos=(0.0, 0.4, 0.1),  # Back to original position from boltnut config
+            pos=(0.5, 0.0, 0.85),  # On table surface
             rot=(1.0, 0.0, 0.0, 0.0),
         ),
         spawn=UsdFileCfg(
             usd_path=f"{ASSET_DIR}/00186/plug.usd",
             activate_contact_sensors=True,
             rigid_props=sim_utils.RigidBodyPropertiesCfg(
+                kinematic_enabled=False,     # ★ 동적(Rigid)로
                 disable_gravity=False,
                 max_depenetration_velocity=5.0,
                 linear_damping=0.0,
@@ -172,7 +166,7 @@ class SceneCfg(InteractiveSceneCfg):
     # Robot - positioned on top of the table
     robot = FRANKA_PANDA_CFG.replace(prim_path="{ENV_REGEX_NS}/Robot")
     robot.init_state = ArticulationCfg.InitialStateCfg(
-        pos=(0.0, 0.0, 0.8),  # Adjusted position above table
+        pos=(0.2, 0.0, 0.8),  # On table surface
         rot=(1.0, 0.0, 0.0, 0.0),
         joint_pos={
             "panda_joint1": 0.0,
@@ -191,6 +185,43 @@ class SceneCfg(InteractiveSceneCfg):
     robot.actuators["panda_forearm"].damping = 0.0
     robot.spawn.rigid_props.disable_gravity = True
 
+def generate_path_pose(pose1, pose2, current_step, total_steps, direction=1):
+    """Generate interpolated pose along the path between pose1 and pose2.
+    
+    Args:
+        pose1: Starting pose (7,)
+        pose2: Ending pose (7,)
+        current_step: Current step in the path
+        total_steps: Total number of steps for the path
+        direction: 1 for pose1->pose2, -1 for pose2->pose1
+        
+    Returns:
+        interpolated_pose: Current pose along the path
+    """
+    # Calculate interpolation parameter (0 to 1)
+    t = current_step / total_steps
+    
+    # Apply smooth interpolation (sine function for smooth acceleration/deceleration)
+    smooth_t = 0.5 * (1 - torch.cos(torch.tensor(t * torch.pi, device=pose1.device)))
+    
+    # Interpolate position
+    interpolated_pos = pose1[:3] * (1 - smooth_t) + pose2[:3] * smooth_t
+    
+    # Interpolate quaternion (slerp-like)
+    interpolated_quat = pose1[3:] * (1 - smooth_t) + pose2[3:] * smooth_t
+    interpolated_quat = interpolated_quat / torch.norm(interpolated_quat)
+    
+    return torch.cat([interpolated_pos, interpolated_quat])
+
+def interpolate_target(start_pose, target_pose, smooth_t):
+    """Interpolate the target pose between the start and target pose."""
+    interpolated_pos = start_pose[:, :3] * (1 - smooth_t) + target_pose[:, :3] * smooth_t
+    interpolated_quat = start_pose[:, 3:] * (1 - smooth_t) + target_pose[:, 3:] * smooth_t
+    interpolated_quat = interpolated_quat / torch.norm(interpolated_quat, dim=1, keepdim=True)
+    return torch.cat([interpolated_pos, interpolated_quat], dim=-1)
+
+# State machine for pick and place task
+# States: 1) Approach position, 2) Pick position, 3) Lift position, 4) Place position
 
 def run_simulator(sim: sim_utils.SimulationContext, scene: InteractiveScene):
     """Runs the simulation loop.
@@ -202,12 +233,19 @@ def run_simulator(sim: sim_utils.SimulationContext, scene: InteractiveScene):
 
     # Extract scene entities for readability.
     robot = scene["robot"]
+    plug = scene["plug"]
+    socket = scene["socket"]
 
     # Obtain indices for the end-effector and arm joints
-    ee_frame_name = "panda_leftfinger"
+    ee_frame_name = "panda_hand"  # Use hand center instead of finger tip
     arm_joint_names = ["panda_joint.*"]
+    gripper_joint_names = ["panda_finger_joint.*"]
     ee_frame_idx = robot.find_bodies(ee_frame_name)[0][0]
     arm_joint_ids = robot.find_joints(arm_joint_names)[0]
+    gripper_joint_ids = robot.find_joints(gripper_joint_names)[0]
+    
+    # Manual offset for end-effector position (adjust z height)
+    ee_offset = torch.tensor([0.0, 0.0, -0.1], device=sim.device)  # Adjust z offset as needed
 
     # Create the OSC
     osc_cfg = OperationalSpaceControllerCfg(
@@ -216,7 +254,7 @@ def run_simulator(sim: sim_utils.SimulationContext, scene: InteractiveScene):
         inertial_dynamics_decoupling=True,
         partial_inertial_dynamics_decoupling=False,
         gravity_compensation=False,
-        motion_damping_ratio_task=1.0,
+        motion_damping_ratio_task=1.0,  # Reduced damping for smoother motion
         motion_control_axes_task=[1, 1, 1, 1, 1, 1],
         nullspace_control="position",
     )
@@ -228,27 +266,46 @@ def run_simulator(sim: sim_utils.SimulationContext, scene: InteractiveScene):
     ee_marker = VisualizationMarkers(frame_marker_cfg.replace(prim_path="/Visuals/ee_current"))
     goal_marker = VisualizationMarkers(frame_marker_cfg.replace(prim_path="/Visuals/ee_goal"))
 
-    # Define targets for the arm (simplified for bolt-nut task)
-    ee_goal_pose_set = torch.tensor(
-        [
-            [0.1, 0.0, 0.8, 0.0, 0.0, 0.0, 1.0],  # Above socket
-            [-0.1, 0.4, 0.8, 0.0, 0.0, 0.0, 1.0],  # Above plug
-            [0.1, 0.0, 0.7, 0.0, 0.0, 0.0, 1.0],  # Lower position for insertion
-        ],
-        device=sim.device,
-    )
-    kp_set_task = torch.tensor(
-        [
-            [320.0, 320.0, 320.0, 320.0, 320.0, 320.0],
-            [320.0, 320.0, 320.0, 320.0, 320.0, 320.0],
-            [320.0, 320.0, 320.0, 320.0, 320.0, 320.0],
-        ],
-        device=sim.device,
-    )
-    ee_target_set = torch.cat([ee_goal_pose_set, kp_set_task], dim=-1)
+    # Get plug and socket positions dynamically
+    # world → base 변환
+    robot_pos_w = robot.data.root_pos_w[0]
+    robot_quat_w = robot.data.root_quat_w[0]
+    identity_quat = torch.tensor([0.0, 0.0, 0.0, 1.0], device=sim.device)
 
+    plug_pos_w = plug.data.root_pos_w[0]
+    socket_pos_w = socket.data.root_pos_w[0]
+
+    plug_pos_b, _ = subtract_frame_transforms(
+        robot_pos_w.unsqueeze(0), robot_quat_w.unsqueeze(0),
+        plug_pos_w.unsqueeze(0), identity_quat.unsqueeze(0)
+    )
+    socket_pos_b, _ = subtract_frame_transforms(
+        robot_pos_w.unsqueeze(0), robot_quat_w.unsqueeze(0),
+        socket_pos_w.unsqueeze(0), identity_quat.unsqueeze(0)
+    )
+    plug_pos_b = plug_pos_b[0]
+    socket_pos_b = socket_pos_b[0]
+
+    # Define target poses for pick and place task based on actual positions
+    # 1) Approach position (above the plug)
+    base_quat = torch.tensor([0.0, 1.0, 0.0, 0.0], device=sim.device)
+    target_pose_1 = torch.cat([plug_pos_b + torch.tensor([0.0, 0.0, 0.00], device=sim.device), base_quat])
+    # 2) Pick position (at the plug)
+    target_pose_2 = torch.cat([plug_pos_b + torch.tensor([0.0, 0.0, 0.00], device=sim.device), base_quat])
+    # 3) Lift position (lifted plug)
+    target_pose_3 = torch.cat([plug_pos_b + torch.tensor([0.0, 0.0, 0.05], device=sim.device), base_quat])
+    # 4) Place position (above socket)
+    target_pose_4 = torch.cat([socket_pos_b + torch.tensor([0.0, 0.0, 0.05], device=sim.device), base_quat])
+    
     # Define simulation stepping
     sim_dt = sim.get_physics_dt()
+
+    # State machine parameters
+    path_duration = 2.0  # seconds per transition
+    path_steps = int(path_duration / sim_dt)  # number of steps for each transition
+    current_path_step = 0
+    current_state = 0  # 0: approach, 1: pick, 2: lift, 3: place
+    gripper_closed = False  # Start with gripper open
 
     # Update existing buffers
     # Note: We need to update buffers before the first step for the controller.
@@ -268,10 +325,9 @@ def run_simulator(sim: sim_utils.SimulationContext, scene: InteractiveScene):
         ee_pose_w,
         joint_pos,
         joint_vel,
-    ) = update_states(sim, scene, robot, ee_frame_idx, arm_joint_ids)
+    ) = update_states(sim, scene, robot, ee_frame_idx, arm_joint_ids, ee_offset)
 
     # Track the given target command
-    current_goal_idx = 0  # Current goal index for the arm
     command = torch.zeros(
         scene.num_envs, osc.action_dim, device=sim.device
     )  # Generic target command, which can be pose, position, force, etc.
@@ -283,73 +339,172 @@ def run_simulator(sim: sim_utils.SimulationContext, scene: InteractiveScene):
     joint_efforts = torch.zeros(scene.num_envs, len(arm_joint_ids), device=sim.device)
 
     count = 0
+    
+    # reset joint state to default
+    default_joint_pos = robot.data.default_joint_pos.clone()
+    default_joint_vel = robot.data.default_joint_vel.clone()
+    robot.write_joint_state_to_sim(default_joint_pos, default_joint_vel)
+    robot.set_joint_effort_target(zero_joint_efforts)  # Set zero torques in the initial step
+    robot.write_data_to_sim()
+    robot.reset()
+    
+    osc.reset()
+    osc.set_command(command=command, current_ee_pose_b=ee_pose_b, current_task_frame_pose_b=ee_pose_b)
+    
     # Simulation loop
     while simulation_app.is_running():
-        print('command', command[0])
-        print('command shape', command.shape)
-        # reset every 500 steps
-        if count % 500 == 0:
-            # reset joint state to default
-            default_joint_pos = robot.data.default_joint_pos.clone()
-            default_joint_vel = robot.data.default_joint_vel.clone()
-            robot.write_joint_state_to_sim(default_joint_pos, default_joint_vel)
-            robot.set_joint_effort_target(zero_joint_efforts)  # Set zero torques in the initial step
-            robot.write_data_to_sim()
-            robot.reset()
-            # reset target pose
-            robot.update(sim_dt)
-            _, _, _, ee_pose_b, _, _, _, _, _ = update_states(
-                sim, scene, robot, ee_frame_idx, arm_joint_ids
-            )  # at reset, the jacobians are not updated to the latest state
-            command, ee_target_pose_b, ee_target_pose_w, current_goal_idx = update_target(
-                sim, scene, osc, root_pose_w, ee_target_set, current_goal_idx
-            )
-            # set the osc command
-            osc.reset()
-            command, task_frame_pose_b = convert_to_task_frame(osc, command=command, ee_target_pose_b=ee_target_pose_b)
-            osc.set_command(command=command, current_ee_pose_b=ee_pose_b, current_task_frame_pose_b=task_frame_pose_b)
+        # 1) 최신 상태 먼저 읽기
+        (
+            jacobian_b,
+            mass_matrix,
+            gravity,
+            ee_pose_b,
+            ee_vel_b,
+            root_pose_w,
+            ee_pose_w,
+            joint_pos,
+            joint_vel,
+        ) = update_states(sim, scene, robot, ee_frame_idx, arm_joint_ids, ee_offset)
+
+        # Recompute plug/socket poses and targets each step to follow moving objects
+        robot_pos_w = robot.data.root_pos_w[0]
+        robot_quat_w = robot.data.root_quat_w[0]
+
+        plug_pos_w = plug.data.root_pos_w[0]
+        socket_pos_w = socket.data.root_pos_w[0]
+
+        plug_pos_b, _ = subtract_frame_transforms(
+            robot_pos_w.unsqueeze(0), robot_quat_w.unsqueeze(0),
+            plug_pos_w.unsqueeze(0), identity_quat.unsqueeze(0)
+        )
+        socket_pos_b, _ = subtract_frame_transforms(
+            robot_pos_w.unsqueeze(0), robot_quat_w.unsqueeze(0),
+            socket_pos_w.unsqueeze(0), identity_quat.unsqueeze(0)
+        )
+        plug_pos_b = plug_pos_b[0]
+        socket_pos_b = socket_pos_b[0]
+
+        base_quat = torch.tensor([0.0, 1.0, 0.0, 0.0], device=sim.device)
+        target_pose_1 = torch.cat([plug_pos_b + torch.tensor([0.0, 0.0, 0.03], device=sim.device), base_quat])
+        target_pose_2 = torch.cat([plug_pos_b + torch.tensor([0.0, 0.0, 0.01], device=sim.device), base_quat])
+        target_pose_3 = torch.cat([plug_pos_b + torch.tensor([0.0, 0.0, 0.05], device=sim.device), base_quat])
+        target_pose_4 = torch.cat([socket_pos_b + torch.tensor([0.0, 0.0, 0.05], device=sim.device), base_quat])
+        
+        # 2) State machine logic for pick and place
+        if current_state == 0:  # Approach to pick position
+            current_target_pose = generate_path_pose(target_pose_1, target_pose_2, current_path_step, path_steps)
+            if current_path_step >= path_steps:
+                current_state = 1
+                current_path_step = 0
+                gripper_closed = True  # Close gripper at pick position
+                
+        elif current_state == 1:  # Pick position (wait for gripper to close)
+            current_target_pose = target_pose_2
+            if current_path_step >= path_steps // 2:  # Wait half the time
+                current_state = 2
+                current_path_step = 0
+                
+        elif current_state == 2:  # Lift the plug (slower and more careful)
+            # Use longer duration for lifting
+            lift_path_steps = int(3.0 / sim_dt)  # 3 seconds for lifting
+            current_target_pose = generate_path_pose(target_pose_2, target_pose_3, current_path_step, lift_path_steps)
+            if current_path_step >= lift_path_steps:
+                current_state = 3
+                current_path_step = 0
+                
+        elif current_state == 3:  # Move to place position (slower for careful placement)
+            # Use longer duration for careful placement
+            place_path_steps = int(2.5 / sim_dt)  # 2.5 seconds for placement
+            current_target_pose = generate_path_pose(target_pose_3, target_pose_4, current_path_step, place_path_steps)
+            if current_path_step >= place_path_steps:
+                current_state = 4
+                current_path_step = 0
+                gripper_closed = False  # Open gripper at place position
+                
+        elif current_state == 4:  # Place position (wait for gripper to open)
+            current_target_pose = target_pose_4
+            if current_path_step >= path_steps // 2:  # Wait half the time for gripper to open
+                current_state = 5
+                current_path_step = 0
+                
+        elif current_state == 5:  # Return to approach position
+            current_target_pose = generate_path_pose(target_pose_4, target_pose_1, current_path_step, path_steps)
+            if current_path_step >= path_steps:
+                current_state = 0  # Reset to start
+                current_path_step = 0
+                gripper_closed = False  # Open gripper for next cycle
+        
+        # Update path step counter
+        current_path_step += 1
+        
+        # target_pose: shape (7,) -> (num_envs, 7)
+        ee_target_pose_b = current_target_pose.unsqueeze(0).repeat(scene.num_envs, 1)
+
+        # 3) 현재 EE 기준의 **상대 오차**로 커맨드 만들기
+        rel_pos_b, rel_quat_b = subtract_frame_transforms(
+            ee_pose_b[:, :3], ee_pose_b[:, 3:7],
+            ee_target_pose_b[:, :3], ee_target_pose_b[:, 3:7]
+        )
+        command = torch.zeros(scene.num_envs, osc.action_dim, device=sim.device)
+        command[:, 0:3] = rel_pos_b
+        command[:, 3:7] = rel_quat_b
+        command[:, 7:13] = torch.tensor([320., 320., 320., 320., 320., 320.], device=sim.device)
+
+        # 4) 매 스텝 **반드시** set_command 호출 (task frame=현재 EE)
+        osc.set_command(
+            command=command,
+            current_ee_pose_b=ee_pose_b,
+            current_task_frame_pose_b=ee_pose_b
+        )
+
+        # 5) 제어 입력 계산/적용
+        joint_efforts = osc.compute(
+            jacobian_b=jacobian_b,
+            current_ee_pose_b=ee_pose_b,
+            current_ee_vel_b=ee_vel_b,
+            current_ee_force_b=torch.zeros(scene.num_envs, 6, device=sim.device),
+            mass_matrix=mass_matrix,
+            gravity=gravity,
+            current_joint_pos=joint_pos,
+            current_joint_vel=joint_vel,
+            nullspace_joint_pos_target=joint_centers,
+        )
+        robot.set_joint_effort_target(joint_efforts, joint_ids=arm_joint_ids)
+        
+        # Control gripper
+        if gripper_closed:
+            gripper_target = torch.tensor([0.0, 0.0], device=sim.device)  # Closed position
         else:
-            # get the updated states
-            (
-                jacobian_b,
-                mass_matrix,
-                gravity,
-                ee_pose_b,
-                ee_vel_b,
-                root_pose_w,
-                ee_pose_w,
-                joint_pos,
-                joint_vel,
-            ) = update_states(sim, scene, robot, ee_frame_idx, arm_joint_ids)
-            # compute the joint commands
-            joint_efforts = osc.compute(
-                jacobian_b=jacobian_b,
-                current_ee_pose_b=ee_pose_b,
-                current_ee_vel_b=ee_vel_b,
-                current_ee_force_b=torch.zeros(scene.num_envs, 6, device=sim.device),  # No force control
-                mass_matrix=mass_matrix,
-                gravity=gravity,
-                current_joint_pos=joint_pos,
-                current_joint_vel=joint_vel,
-                nullspace_joint_pos_target=joint_centers,
-            )
-            # apply actions
-            robot.set_joint_effort_target(joint_efforts, joint_ids=arm_joint_ids)
-            robot.write_data_to_sim()
+            gripper_target = torch.tensor([0.04, 0.04], device=sim.device)  # Open position
+        
+        # Apply gripper control (position control)
+        robot.set_joint_position_target(gripper_target, joint_ids=gripper_joint_ids)
+        
+        robot.write_data_to_sim()
 
-        # update marker positions
-        ee_marker.visualize(ee_pose_w[:, 0:3], ee_pose_w[:, 3:7])
-        goal_marker.visualize(ee_target_pose_w[:, 0:3], ee_target_pose_w[:, 3:7])
+        # 마커 업데이트 - 같은 좌표계 사용
+        # 현재 위치: world frame
+        # ee_marker.visualize(ee_pose_w[:, 0:3], ee_pose_w[:, 3:7])
+        
+        # # 목표 위치: current_target_pose를 world frame으로 변환
+        # target_pos_w, target_quat_w = combine_frame_transforms(
+        #     root_pose_w[:, 0:3], root_pose_w[:, 3:7],
+        #     current_target_pose[:3].unsqueeze(0), current_target_pose[3:7].unsqueeze(0)
+        # )
+        # target_pose_w = torch.cat([target_pos_w, target_quat_w], dim=-1)
+        # goal_marker.visualize(target_pose_w[:, 0:3], target_pose_w[:, 3:7])
 
-        # perform step
+
+        # Debug: Print current state
+        if count % 100 == 0:  # Print every 100 steps
+            state_names = ["Approach", "Pick", "Lift", "Move", "Place", "Return"]
+            print(f"State: {state_names[current_state]}, Gripper: {'Closed' if gripper_closed else 'Open'}")
+        
+        # 스텝/업데이트
         sim.step(render=True)
-        # update robot buffers
-        robot.update(sim_dt)
-        # update buffers
-        scene.update(sim_dt)
-        # update sim-time
+        robot.update(sim.get_physics_dt())
+        scene.update(sim.get_physics_dt())
         count += 1
-
 
 # Update robot states
 def update_states(
@@ -358,6 +513,7 @@ def update_states(
     robot: Articulation,
     ee_frame_idx: int,
     arm_joint_ids: list[int],
+    ee_offset: torch.Tensor,
 ):
     """Update the robot states.
 
@@ -367,6 +523,7 @@ def update_states(
         robot: (Articulation) Robot articulation.
         ee_frame_idx: (int) End-effector frame index.
         arm_joint_ids: (list[int]) Arm joint indices.
+        ee_offset: (torch.Tensor) Manual offset for end-effector position.
 
     Returns:
         jacobian_b (torch.tensor): Jacobian in the body frame.
@@ -395,6 +552,10 @@ def update_states(
     root_quat_w = robot.data.root_quat_w
     ee_pos_w = robot.data.body_pos_w[:, ee_frame_idx]
     ee_quat_w = robot.data.body_quat_w[:, ee_frame_idx]
+    
+    # Apply manual offset to end-effector position
+    ee_pos_w = ee_pos_w + ee_offset.unsqueeze(0).repeat(scene.num_envs, 1)
+    
     ee_pos_b, ee_quat_b = subtract_frame_transforms(root_pos_w, root_quat_w, ee_pos_w, ee_quat_w)
     root_pose_w = torch.cat([root_pos_w, root_quat_w], dim=-1)
     ee_pose_w = torch.cat([ee_pos_w, ee_quat_w], dim=-1)
@@ -431,8 +592,7 @@ def update_target(
     scene: InteractiveScene,
     osc: OperationalSpaceController,
     root_pose_w: torch.tensor,
-    ee_target_set: torch.tensor,
-    current_goal_idx: int,
+    target_pose: torch.tensor,
 ):
     """Update the targets for the operational space controller.
 
@@ -453,8 +613,10 @@ def update_target(
 
     # update the ee desired command
     command = torch.zeros(scene.num_envs, osc.action_dim, device=sim.device)
-    command[:] = ee_target_set[current_goal_idx]
-
+    # Set pose (first 7 elements)
+    command[:, :7] = target_pose
+    # Set Kp gains (last 6 elements) - using lower values for smoother motion
+    command[:, 7:] = torch.tensor([260.0, 260.0, 260.0, 260.0, 260.0, 260.0], device=sim.device)
     # update the ee desired pose
     ee_target_pose_b = torch.zeros(scene.num_envs, 7, device=sim.device)
     for target_type in osc.cfg.target_types:
@@ -469,9 +631,7 @@ def update_target(
     )
     ee_target_pose_w = torch.cat([ee_target_pos_w, ee_target_quat_w], dim=-1)
 
-    next_goal_idx = (current_goal_idx + 1) % len(ee_target_set)
-
-    return command, ee_target_pose_b, ee_target_pose_w, next_goal_idx
+    return command, ee_target_pose_b, ee_target_pose_w
 
 
 # Convert the target commands to the task frame
@@ -516,11 +676,6 @@ def main():
     # Play the simulator
     sim.reset()
     # Now we are ready!
-    print("[INFO]: Setup complete...")
-    print(f"[INFO]: Table position: [0.5, 0.0, 0.4] (top ~ 0.8m)")
-    print(f"[INFO]: Robot position: [0.0, 0.0, 1.2]")
-    print(f"[INFO]: Socket position: [0.1, 0.0, 0.5]")
-    print(f"[INFO]: Plug position: [-0.1, 0.4, 0.5]")
     # Run the simulator
     run_simulator(sim, scene)
 

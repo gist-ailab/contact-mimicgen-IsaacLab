@@ -115,9 +115,9 @@ class Hole8mm(FixedAssetCfg):
 class Extraction(DisassemblyTask):
     name = "extraction"
 
-    assembly_id = '00004'
+    assembly_id = '00559'
     assembly_dir = f"{ASSET_DIR}/{assembly_id}/"
-    disassembly_dir = 'test_run'
+    disassembly_dir = '/home/ailab-2204/Workspace/contact-mimicgen-IsaacLab/outputs/disassembly/ASSEMBLY_ID'
     num_log_traj = 1000
 
     fixed_asset_cfg = Hole8mm()
