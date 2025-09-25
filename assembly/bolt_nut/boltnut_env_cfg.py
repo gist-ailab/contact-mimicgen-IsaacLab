@@ -12,6 +12,7 @@ from isaaclab.envs import ManagerBasedRLEnvCfg
 from isaaclab.managers import ObservationGroupCfg as ObsGroup
 from isaaclab.managers import ObservationTermCfg as ObsTerm
 from isaaclab.managers import SceneEntityCfg
+from isaaclab.sensors import CameraCfg
 from isaaclab.managers import TerminationTermCfg as DoneTerm
 from isaaclab.scene import InteractiveSceneCfg
 from isaaclab.sensors.frame_transformer.frame_transformer_cfg import FrameTransformerCfg
@@ -87,6 +88,14 @@ class ObservationsCfg:
         eef_pos = ObsTerm(func=mdp.ee_frame_pos)
         eef_quat = ObsTerm(func=mdp.ee_frame_quat)
         gripper_pos = ObsTerm(func=mdp.gripper_pos)
+        table_cam = ObsTerm(
+            func=mdp.image, params={"sensor_cfg": SceneEntityCfg("table_cam"), "data_type": "rgb", "normalize": False}
+        )
+        wrist_cam = ObsTerm(
+            func=mdp.image, params={"sensor_cfg": SceneEntityCfg("wrist_cam"), "data_type": "rgb", "normalize": False}
+        )
+
+
 
         def __post_init__(self):
             self.enable_corruption = False
@@ -158,8 +167,9 @@ class TerminationsCfg:
     # )
 
     # success = DoneTerm(func=mdp.cubes_stacked)
-    success = DoneTerm(func=mdp.boltnut_assembled)
-
+    # success = DoneTerm(func=mdp.boltnut_assembled)
+    # for camera test
+    success = DoneTerm(func=mdp.move_done)
 
 @configclass
 class BoltNutEnvCfg(ManagerBasedRLEnvCfg):
@@ -201,3 +211,41 @@ class BoltNutEnvCfg(ManagerBasedRLEnvCfg):
 
         self.sim.physics_material.static_friction = 0.9
         self.sim.physics_material.dynamic_friction = 0.7
+        
+        # Set cameras
+        # Set wrist camera
+        self.scene.wrist_cam = CameraCfg(
+            prim_path="{ENV_REGEX_NS}/Robot/panda_hand/wrist_cam",
+            update_period=0.0,
+            height=84,
+            width=84,
+            data_types=["rgb", "distance_to_image_plane"],
+            spawn=sim_utils.PinholeCameraCfg(
+                focal_length=24.0, focus_distance=400.0, horizontal_aperture=20.955, clipping_range=(0.1, 2)
+            ),
+            offset=CameraCfg.OffsetCfg(
+                pos=(0.13, 0.0, -0.15), rot=(-0.70614, 0.03701, 0.03701, -0.70614), convention="ros"
+            ),
+        )
+
+        # Set table view camera
+        self.scene.table_cam = CameraCfg(
+            prim_path="{ENV_REGEX_NS}/table_cam",
+            update_period=0.0,
+            height=84,
+            width=84,
+            data_types=["rgb", "distance_to_image_plane"],
+            spawn=sim_utils.PinholeCameraCfg(
+                focal_length=24.0, focus_distance=400.0, horizontal_aperture=20.955, clipping_range=(0.1, 2)
+            ),
+            offset=CameraCfg.OffsetCfg(
+                pos=(1.0, 0.0, 0.4), rot=(0.35355, -0.61237, -0.61237, 0.35355), convention="ros"
+            ),
+        )
+
+        # Set settings for camera rendering
+        self.rerender_on_reset = True
+        self.sim.render.antialiasing_mode = "OFF"  # disable dlss
+
+        # List of image observations in policy observations
+        self.image_obs_list = ["table_cam", "wrist_cam"]

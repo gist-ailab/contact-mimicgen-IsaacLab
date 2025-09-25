@@ -99,7 +99,7 @@ class SceneCfg(InteractiveSceneCfg):
     socket = ArticulationCfg(
         prim_path="{ENV_REGEX_NS}/Socket",
         init_state=ArticulationCfg.InitialStateCfg(
-            pos=(0.6, 0.0, 0.8),  # On table surface
+            pos=(0.6, -0.1, 0.8),  # On table surface
             rot=(1.0, 0.0, 0.0, 0.0),
             joint_pos={},
             joint_vel={},
@@ -134,7 +134,7 @@ class SceneCfg(InteractiveSceneCfg):
     plug = RigidObjectCfg(
         prim_path="{ENV_REGEX_NS}/Plug",
         init_state=RigidObjectCfg.InitialStateCfg(
-            pos=(0.5, 0.0, 0.85),  # On table surface
+            pos=(0.6, 0.1, 0.8),  # On table surface
             rot=(1.0, 0.0, 0.0, 0.0),
         ),
         spawn=UsdFileCfg(
@@ -387,8 +387,9 @@ def run_simulator(sim: sim_utils.SimulationContext, scene: InteractiveScene):
         base_quat = torch.tensor([0.0, 1.0, 0.0, 0.0], device=sim.device)
         target_pose_1 = torch.cat([plug_pos_b + torch.tensor([0.0, 0.0, 0.03], device=sim.device), base_quat])
         target_pose_2 = torch.cat([plug_pos_b + torch.tensor([0.0, 0.0, 0.01], device=sim.device), base_quat])
-        target_pose_3 = torch.cat([plug_pos_b + torch.tensor([0.0, 0.0, 0.05], device=sim.device), base_quat])
+        target_pose_3 = torch.cat([plug_pos_b + torch.tensor([0.0, 0.0, 0.03], device=sim.device), base_quat])
         target_pose_4 = torch.cat([socket_pos_b + torch.tensor([0.0, 0.0, 0.05], device=sim.device), base_quat])
+        target_pose_5 = torch.cat([socket_pos_b + torch.tensor([0.0, 0.0, 0.01], device=sim.device), base_quat])
         
         # 2) State machine logic for pick and place
         if current_state == 0:  # Approach to pick position
@@ -406,7 +407,7 @@ def run_simulator(sim: sim_utils.SimulationContext, scene: InteractiveScene):
                 
         elif current_state == 2:  # Lift the plug (slower and more careful)
             # Use longer duration for lifting
-            lift_path_steps = int(3.0 / sim_dt)  # 3 seconds for lifting
+            lift_path_steps = int(1.0 / sim_dt)  # 3 seconds for lifting
             current_target_pose = generate_path_pose(target_pose_2, target_pose_3, current_path_step, lift_path_steps)
             if current_path_step >= lift_path_steps:
                 current_state = 3
@@ -414,21 +415,20 @@ def run_simulator(sim: sim_utils.SimulationContext, scene: InteractiveScene):
                 
         elif current_state == 3:  # Move to place position (slower for careful placement)
             # Use longer duration for careful placement
-            place_path_steps = int(2.5 / sim_dt)  # 2.5 seconds for placement
+            place_path_steps = int(1 / sim_dt)  # 2.5 seconds for placement
             current_target_pose = generate_path_pose(target_pose_3, target_pose_4, current_path_step, place_path_steps)
             if current_path_step >= place_path_steps:
                 current_state = 4
                 current_path_step = 0
-                gripper_closed = False  # Open gripper at place position
                 
-        elif current_state == 4:  # Place position (wait for gripper to open)
-            current_target_pose = target_pose_4
-            if current_path_step >= path_steps // 2:  # Wait half the time for gripper to open
-                current_state = 5
+        elif current_state == 4:  # Return to approach position
+            current_target_pose = generate_path_pose(target_pose_4, target_pose_5, current_path_step, path_steps)
+            if current_path_step >= path_steps:
+                current_state = 0  # Reset to start
                 current_path_step = 0
-                
+        
         elif current_state == 5:  # Return to approach position
-            current_target_pose = generate_path_pose(target_pose_4, target_pose_1, current_path_step, path_steps)
+            current_target_pose = generate_path_pose(target_pose_5, target_pose_1, current_path_step, path_steps)
             if current_path_step >= path_steps:
                 current_state = 0  # Reset to start
                 current_path_step = 0
@@ -497,7 +497,7 @@ def run_simulator(sim: sim_utils.SimulationContext, scene: InteractiveScene):
 
         # Debug: Print current state
         if count % 100 == 0:  # Print every 100 steps
-            state_names = ["Approach", "Pick", "Lift", "Move", "Place", "Return"]
+            state_names = ["Approach", "Pick", "Lift", "Move", "Place", "Insert", "Return"]
             print(f"State: {state_names[current_state]}, Gripper: {'Closed' if gripper_closed else 'Open'}")
         
         # 스텝/업데이트

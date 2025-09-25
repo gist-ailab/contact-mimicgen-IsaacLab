@@ -1,0 +1,1 @@
+python record_demos.py --task Isaac-BoltNut-Franka-IK-Rel-v0 --teleop_device pyspacemouse --dataset_file ./datasets/test_dataset.hdf5 --num_demos 2 --kit_args "--/log/level=error --/log/fileLogLevel=error --/log/outputStreamLevel=error" --osc

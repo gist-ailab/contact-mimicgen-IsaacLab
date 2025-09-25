@@ -162,4 +162,12 @@ def _check_plug_inserted_in_socket(
     
     # return torch.logical_and(is_plug_height_success, is_plug_close_to_socket)
     return is_plug_close_to_socket
-    
+
+def move_done(
+    env: ManagerBasedRLEnv,
+    ee_frame_cfg: SceneEntityCfg = SceneEntityCfg("ee_frame"),
+    ee_height_threshold: float = 0.10,
+):
+    ee_frame = env.scene[ee_frame_cfg.name]
+    ee_height = ee_frame.data.target_pos_w[:, 0, 2]
+    return ee_height < ee_height_threshold

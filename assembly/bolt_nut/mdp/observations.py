@@ -31,7 +31,6 @@ def socket_plug_positions_in_world_frame(
     return torch.cat((socket.data.root_pos_w, plug.data.root_pos_w), dim=1)
 
 
-
 def instance_randomize_socket_plug_positions_in_world_frame(
     env: ManagerBasedRLEnv,
     socket_cfg: SceneEntityCfg = SceneEntityCfg("socket"),
