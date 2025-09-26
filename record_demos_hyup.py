@@ -485,6 +485,7 @@ def main():
         with window.ui_window_elements["main_vstack"]:
             demo_label = ui.Label(label_text)
             subtask_label = ui.Label("")
+            pos_label = ui.Label("")  # ← 추가
             instruction_display.set_labels(subtask_label, demo_label)
 
     subtasks = {}
@@ -508,10 +509,19 @@ def main():
             vis_marker.visualize(translations=env.unwrapped.scene["ee_frame"].data.target_pos_w[0][0].unsqueeze(0),
                                  orientations=env.unwrapped.scene["ee_frame"].data.target_quat_w[0][0].unsqueeze(0))
             teleop_data = teleop_interface.advance()
-            # perform action on environment
+
+            # 실시간 위치 표시(성공 여부와 무관)
+            ee_pos = env.unwrapped.scene["ee_frame"].data.target_pos_w[0][0]
+            base_pos = env.unwrapped.scene["robot"].data.root_pos_w[0]
+            try:
+                pos_label.text = f"EE z: {ee_pos[2].item():.3f} | EE: {ee_pos.tolist()} | Base: {base_pos.tolist()}"
+            except NameError:
+                pass  # handtracking 모드 등으로 UI 라벨이 없을 때 무시
+
+
+            # 이후 액션/스텝
             if running_recording_instance:
                 # compute actions based on environment
-                
                 actions = pre_process_actions(teleop_data, env.num_envs, env.device, 
                                               args_cli.osc,
                                               stiffness,
@@ -526,6 +536,11 @@ def main():
                 env.sim.render()
             if success_term is not None:
                 if bool(success_term.func(env, **success_term.params)[0]):
+                    # 성공 누적 중일 때 상태 한 번 출력
+                    # ee_pos = env.unwrapped.scene["ee_frame"].data.target_pos_w[0][0]
+                    # base_pos = env.unwrapped.scene["robot"].data.root_pos_w[0]
+                    # pos_label.text = f"EE z: {ee_pos[2].item():.3f} | EE: {ee_pos.tolist()} | Base: {base_pos.tolist()}"
+                    # print(f"[SUCCESS STEP] EE z: {ee_pos[2].item():.4f}, pos: {ee_pos.tolist()}")
                     success_step_count += 1
                     if success_step_count >= args_cli.num_success_steps:
                         env.recorder_manager.record_pre_reset([0], force_export_or_skip=False)

@@ -166,7 +166,7 @@ def _check_plug_inserted_in_socket(
 def move_done(
     env: ManagerBasedRLEnv,
     ee_frame_cfg: SceneEntityCfg = SceneEntityCfg("ee_frame"),
-    ee_height_threshold: float = 0.10,
+    ee_height_threshold: float = 0.30,
 ):
     ee_frame = env.scene[ee_frame_cfg.name]
     ee_height = ee_frame.data.target_pos_w[:, 0, 2]
